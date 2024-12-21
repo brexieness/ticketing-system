@@ -7,7 +7,21 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
 
 require 'db_connection.php';
 
-// Fetch current ticket stock
+// Fetch movies including tickets_available
+$movies = [];
+try {
+    $stmt = $conn->query("
+        SELECT m.id, m.movie_name, m.ticket_price, m.showtime_start, m.showtime_end, 
+               COALESCE(ts.tickets_available, 0) AS tickets_available 
+        FROM movies m 
+        LEFT JOIN ticket_stock ts ON m.id = ts.movie_id 
+        ORDER BY m.showtime_start DESC");
+    $movies = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    die("Error: " . $e->getMessage());
+}
+
+// Fetch current ticket stock for validation
 $stmt = $conn->query("SELECT tickets_available FROM ticket_stock WHERE id = 1");
 $row = $stmt->fetch(PDO::FETCH_ASSOC);
 $tickets_available = $row['tickets_available'] ?? 0;
@@ -25,8 +39,6 @@ if (!$cash_log) {
     // Don't process the sale, display the modal instead
     $receipt = null;
 }
-
-
 
 $receipt = null; // Initialize receipt variable
 

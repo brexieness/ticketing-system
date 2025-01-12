@@ -11,11 +11,21 @@ require 'db_connection.php';
 $movies = [];
 try {
     $stmt = $conn->query("
-        SELECT m.id, m.movie_name, m.ticket_price, m.showtime_start, m.showtime_end, 
-               COALESCE(ts.tickets_available, 0) AS tickets_available 
-        FROM movies m 
-        LEFT JOIN ticket_stock ts ON m.id = ts.movie_id 
-        ORDER BY m.showtime_start DESC");
+    SELECT 
+        m.id, 
+        m.movie_name, 
+        m.ticket_price, 
+        MIN(s.showtime_start) AS showtime_start, 
+        MAX(s.showtime_end) AS showtime_end, 
+        COALESCE(ts.tickets_available, 0) AS tickets_available 
+    FROM movies m 
+    LEFT JOIN showtimes s ON m.id = s.movie_id 
+    LEFT JOIN ticket_stock ts ON m.id = ts.movie_id 
+    GROUP BY m.id, m.movie_name, m.ticket_price, ts.tickets_available
+    ORDER BY showtime_start DESC
+");
+
+
     $movies = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     die("Error: " . $e->getMessage());
@@ -80,26 +90,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_movie'])) {
     $ticket_price = $_POST['ticket_price'];
     $showtime_start = $_POST['showtime_start'];
     $showtime_end = $_POST['showtime_end'];
-    $tickets_available = $_POST['tickets_available']; // Ensure tickets_available is captured
+    $tickets_available = $_POST['tickets_available'];
 
     try {
         $conn->beginTransaction();
 
-        // Update movie details in movies table
+        // Update movie name and ticket price in movies table
         $stmt = $conn->prepare("
             UPDATE movies 
-            SET movie_name = :movie_name, ticket_price = :ticket_price, 
-                showtime_start = :showtime_start, showtime_end = :showtime_end 
+            SET movie_name = :movie_name, ticket_price = :ticket_price
             WHERE id = :movie_id");
         $stmt->execute([
             ':movie_name' => $movie_name,
             ':ticket_price' => $ticket_price,
+            ':movie_id' => $movie_id
+        ]);
+
+        // Update showtime details in showtimes table
+        $stmt = $conn->prepare("
+            UPDATE showtimes 
+            SET showtime_start = :showtime_start, showtime_end = :showtime_end 
+            WHERE movie_id = :movie_id");
+        $stmt->execute([
             ':showtime_start' => $showtime_start,
             ':showtime_end' => $showtime_end,
             ':movie_id' => $movie_id
         ]);
 
-        // Update stock info in ticket_stock table
+        // Update tickets available in ticket_stock table
         $stmt = $conn->prepare("
             UPDATE ticket_stock 
             SET tickets_available = :tickets_available 
@@ -115,6 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_movie'])) {
         $conn->rollBack();
         $_SESSION['feedback'] = "Failed to update movie: " . $e->getMessage();
     }
+
 
     header('Location: manage_movies.php');
     exit();
@@ -147,12 +166,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['delete_movie'])) {
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Movies</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha3/dist/css/bootstrap.min.css">
 </head>
+
 <body>
     <div class="container mt-5">
         <h1>Manage Movies (Admin)</h1>
@@ -160,7 +181,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['delete_movie'])) {
 
         <!-- Feedback Section -->
         <?php if (!empty($feedback)): ?>
-            <div class="alert <?= strpos($feedback, 'Failed') === false ? 'alert-success' : 'alert-danger' ?> alert-dismissible fade show" role="alert">
+            <div class="alert <?= strpos($feedback, 'Failed') === false ? 'alert-success' : 'alert-danger' ?> alert-dismissible fade show"
+                role="alert">
                 <?= htmlspecialchars($feedback) ?>
                 <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
@@ -191,11 +213,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['delete_movie'])) {
                         <td><?= date('F j, Y, g:i A', strtotime($movie['showtime_end'])) ?></td>
                         <td><?= $movie['tickets_available'] ?></td>
                         <td>
-                            <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#editMovieModal<?= $movie['id'] ?>">Edit</button>
-                            <a href="manage_movies.php?delete_movie=<?= $movie['id'] ?>" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete this movie?')">Delete</a>
+                            <button class="btn btn-warning btn-sm" data-bs-toggle="modal"
+                                data-bs-target="#editMovieModal<?= $movie['id'] ?>">Edit</button>
+                            <a href="manage_movies.php?delete_movie=<?= $movie['id'] ?>" class="btn btn-danger btn-sm"
+                                onclick="return confirm('Are you sure you want to delete this movie?')">Delete</a>
                         </td>
                     </tr>
                     <!-- Edit Modal for Each Movie -->
+
+                    <!-- Edit Modal for Each Movie -->
+                    <div class="modal fade" id="editMovieModal<?= $movie['id'] ?>" tabindex="-1"
+                        aria-labelledby="editMovieModalLabel<?= $movie['id'] ?>" aria-hidden="true">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="editMovieModalLabel<?= $movie['id'] ?>">Edit Movie:
+                                        <?= htmlspecialchars($movie['movie_name']) ?></h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                        aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <form action="manage_movies.php" method="POST">
+                                        <input type="hidden" name="movie_id" value="<?= $movie['id'] ?>">
+
+                                        <div class="mb-3">
+                                            <label for="movie_name" class="form-label">Movie Name</label>
+                                            <input type="text" class="form-control" id="movie_name" name="movie_name"
+                                                value="<?= htmlspecialchars($movie['movie_name']) ?>" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="ticket_price" class="form-label">Ticket Price</label>
+                                            <input type="number" class="form-control" id="ticket_price" name="ticket_price"
+                                                step="0.01" value="<?= $movie['ticket_price'] ?>" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="showtime_start" class="form-label">Showtime Start</label>
+                                            <input type="datetime-local" class="form-control" id="showtime_start"
+                                                name="showtime_start"
+                                                value="<?= date('Y-m-d\TH:i', strtotime($movie['showtime_start'])) ?>"
+                                                required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="showtime_end" class="form-label">Showtime End</label>
+                                            <input type="datetime-local" class="form-control" id="showtime_end"
+                                                name="showtime_end"
+                                                value="<?= date('Y-m-d\TH:i', strtotime($movie['showtime_end'])) ?>"
+                                                required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="tickets_available" class="form-label">Tickets Available</label>
+                                            <input type="number" class="form-control" id="tickets_available"
+                                                name="tickets_available" value="<?= $movie['tickets_available'] ?>"
+                                                required>
+                                        </div>
+                                        <button type="submit" class="btn btn-primary" name="edit_movie">Update
+                                            Movie</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+
+
                     <!-- Code similar to the Add Modal with prefilled values -->
                 <?php endforeach; ?>
             </tbody>
@@ -218,23 +298,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['delete_movie'])) {
                         </div>
                         <div class="mb-3">
                             <label for="ticket_price" class="form-label">Ticket Price</label>
-                            <input type="number" class="form-control" id="ticket_price" name="ticket_price" step="0.01" required>
+                            <input type="number" class="form-control" id="ticket_price" name="ticket_price" step="0.01"
+                                required>
                         </div>
                         <div class="mb-3">
                             <label for="showtime_start" class="form-label">Showtime Start</label>
                             <input type="datetime-local" class="form-control" id="showtime_start" name="showtime_start"
-                            required>
+                                required>
                         </div>
                         <div class="mb-3">
                             <label for="showtime_end" class="form-label">Showtime End</label>
-                            <input type="datetime-local" class="form-control" id="showtime_end" name="showtime_end" required>
+                            <input type="datetime-local" class="form-control" id="showtime_end" name="showtime_end"
+                                required>
                         </div>
                         <div class="mb-3">
                             <label for="tickets_available" class="form-label">Tickets Available</label>
-                            <input type="number" class="form-control" id="tickets_available" name="tickets_available" required>
+                            <input type="number" class="form-control" id="tickets_available" name="tickets_available"
+                                required>
                         </div>
                         <button type="submit" class="btn btn-primary" name="add_movie">Add Movie</button>
                     </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feedback Modal -->
+    <div class="modal fade" id="feedbackModal" tabindex="-1" aria-labelledby="feedbackModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="feedbackModalLabel">Feedback</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p id="feedbackMessage"><?= htmlspecialchars($feedback) ?></p>
                 </div>
             </div>
         </div>
@@ -256,6 +354,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['delete_movie'])) {
                 }
             });
         });
+
+        <?php if (!empty($feedback)): ?>
+            // Show feedback modal if there is a feedback message
+            var feedbackModal = new bootstrap.Modal(document.getElementById('feedbackModal'));
+            feedbackModal.show();
+        <?php endif; ?>
+    </script>
+
+    <!-- Include Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Validation Script -->
+    <script>
+        document.querySelectorAll('form').forEach(form => {
+            form.addEventListener('submit', (event) => {
+                const start = form.querySelector('#showtime_start')?.value;
+                const end = form.querySelector('#showtime_end')?.value;
+
+                if (start && end && new Date(start) >= new Date(end)) {
+                    event.preventDefault();
+                    alert('Showtime Start must be earlier than Showtime End.');
+                }
+            });
+        });
     </script>
 </body>
+
 </html>

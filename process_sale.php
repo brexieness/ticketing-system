@@ -1,4 +1,8 @@
 <?php
+
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
 session_start();
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
     header('Location: login.php');
@@ -7,115 +11,103 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
 
 require 'db_connection.php';
 
-// Fetch movies including tickets_available
-$movies = [];
-try {
-    $stmt = $conn->query("
-        SELECT m.id, m.movie_name, m.ticket_price, m.showtime_start, m.showtime_end, 
-               COALESCE(ts.tickets_available, 0) AS tickets_available 
-        FROM movies m 
-        LEFT JOIN ticket_stock ts ON m.id = ts.movie_id 
-        ORDER BY m.showtime_start DESC");
-    $movies = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    die("Error: " . $e->getMessage());
+// Fetch movies with showtimes grouped by movie ID
+$movies_stmt = $conn->prepare("
+    SELECT m.id, m.movie_name, m.ticket_price, ts.tickets_available, s.showtime_start, s.showtime_end
+    FROM movies m
+    LEFT JOIN ticket_stock ts ON m.id = ts.movie_id
+    LEFT JOIN showtimes s ON m.id = s.movie_id
+    ORDER BY m.movie_name, s.showtime_start
+");
+$movies_stmt->execute();
+$movies = $movies_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Group movies by their ID
+$groupedMovies = [];
+foreach ($movies as $movie) {
+    $movieId = $movie['id'];
+    $groupedMovies[$movieId]['movie_name'] = $movie['movie_name'];
+    $groupedMovies[$movieId]['ticket_price'] = $movie['ticket_price'];
+    $groupedMovies[$movieId]['tickets_available'] = $movie['tickets_available'];
+    if ($movie['showtime_start'] && $movie['showtime_end']) {
+        $groupedMovies[$movieId]['showtimes'][] = [
+            'showtime_start' => $movie['showtime_start'],
+            'showtime_end' => $movie['showtime_end'],
+        ];
+    }
 }
 
-// Fetch current ticket stock for validation
-$stmt = $conn->query("SELECT tickets_available FROM ticket_stock WHERE id = 1");
-$row = $stmt->fetch(PDO::FETCH_ASSOC);
-$tickets_available = $row['tickets_available'] ?? 0;
+// Handle AJAX request for processing the sale
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'process_sale') {
+    $movie_id = $_POST['movie_id'] ?? null;
+    $quantity = $_POST['quantity'] ?? null;
+    $customer_money = $_POST['customer_money'] ?? null;
 
-// Check if cash-in is logged
-$cash_log_stmt = $conn->prepare("SELECT * FROM cash_log WHERE cashier_id = :cashier_id AND DATE(log_date) = CURDATE() AND cash_in IS NOT NULL");
-$cash_log_stmt->execute(['cashier_id' => $_SESSION['user_id']]);
-$cash_log = $cash_log_stmt->fetch(PDO::FETCH_ASSOC);
-
-// If no cash-in log found, display the modal to prompt for cash-in
-$show_cash_in_modal = !$cash_log;
-
-if (!$cash_log) {
-    $_SESSION['error_message'] = "You must log your cash-in amount before processing sales.";
-    // Don't process the sale, display the modal instead
-    $receipt = null;
-}
-
-$receipt = null; // Initialize receipt variable
-
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && $cash_log) {
-    $movie_id = intval($_POST['movie_id']);
-    $num_tickets = intval($_POST['num_tickets']);
-    $payment_amount = floatval($_POST['payment_amount']);
-
-    // Validate input
-    if ($num_tickets <= 0 || $payment_amount <= 0) {
-        echo "<div class='alert alert-danger'>Invalid input. Please try again.</div>";
-    } else {
-        // Fetch selected movie details
-        $movie_stmt = $conn->prepare("SELECT movie_name, ticket_price FROM movies WHERE id = :movie_id");
-        $movie_stmt->execute(['movie_id' => $movie_id]);
-        $movie = $movie_stmt->fetch(PDO::FETCH_ASSOC);
-
-        if ($movie) {
-            $movie_name = $movie['movie_name'];
-            $ticket_price = $movie['ticket_price'];
-            $total_sale = $ticket_price * $num_tickets;
-
-            // Fetch ticket stock for the selected movie
-            $ticket_stock_stmt = $conn->prepare("SELECT tickets_available FROM ticket_stock WHERE movie_id = :movie_id");
-            $ticket_stock_stmt->execute(['movie_id' => $movie_id]);
-            $ticket_stock = $ticket_stock_stmt->fetch(PDO::FETCH_ASSOC);
-
-            // Check if enough tickets are available
-            if ($ticket_stock && $ticket_stock['tickets_available'] >= $num_tickets) {
-                // Calculate change
-                if ($payment_amount >= $total_sale) {
-                    $change = $payment_amount - $total_sale;
-
-                    // Update ticket stock
-                    $new_stock = $ticket_stock['tickets_available'] - $num_tickets;
-                    $update_stock_stmt = $conn->prepare("UPDATE ticket_stock SET tickets_available = :new_stock WHERE movie_id = :movie_id");
-                    $update_stock_stmt->execute(['new_stock' => $new_stock, 'movie_id' => $movie_id]);
-
-                    // Record the sale
-                    $sale_stmt = $conn->prepare("INSERT INTO sales (cashier_id, movie_name, quantity_sold, total_sale, sale_date) VALUES (:cashier_id, :movie_name, :quantity_sold, :total_sale, NOW())");
-                    $sale_stmt->execute([ 
-                        'cashier_id' => $_SESSION['user_id'],
-                        'movie_name' => $movie_name,
-                        'quantity_sold' => $num_tickets,
-                        'total_sale' => $total_sale,
-                    ]);
-
-                    // Update cash log (if needed)
-                    $update_cash_log_stmt = $conn->prepare("UPDATE cash_log SET cash_on_hand = cash_on_hand + :sale_amount WHERE id = :cash_log_id");
-                    $update_cash_log_stmt->execute([
-                        'sale_amount' => $total_sale,
-                        'cash_log_id' => $cash_log['id'],
-                    ]);
-
-                    // Prepare the receipt data
-                    $receipt = [
-                        'total_sale' => $total_sale,
-                        'payment_received' => $payment_amount,
-                        'change' => $change,
-                        'movie_name' => $movie_name,
-                        'num_tickets' => $num_tickets
-                    ];
-                } else {
-                    echo "<div class='alert alert-danger'>Insufficient payment. Please enter a higher amount.</div>";
-                }
-            } else {
-                echo "<div class='alert alert-danger'>Not enough tickets available. Please try again.</div>";
-            }
-        } else {
-            echo "<div class='alert alert-danger'>Movie not found.</div>";
-        }
+    if (!$movie_id || !$quantity || $quantity < 1 || !$customer_money || $customer_money < 1) {
+        echo json_encode(['success' => false, 'message' => 'Invalid input data.']);
+        exit();
     }
 
-    // Refresh ticket availability
-    $stmt = $conn->query("SELECT tickets_available FROM ticket_stock WHERE id = 1");
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    $tickets_available = $row['tickets_available'] ?? 0;
+    try {
+        // Fetch movie details and validate stock
+        $stmt = $conn->prepare("
+            SELECT ts.tickets_available, m.ticket_price, m.movie_name 
+            FROM ticket_stock ts 
+            JOIN movies m ON ts.movie_id = m.id 
+            WHERE ts.movie_id = :movie_id
+        ");
+        $stmt->execute(['movie_id' => $movie_id]);
+        $movie = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$movie || $movie['tickets_available'] < $quantity) {
+            echo json_encode(['success' => false, 'message' => 'Insufficient tickets available.']);
+            exit();
+        }
+
+        // Calculate total cost
+        $total_price = $movie['ticket_price'] * $quantity;
+        $change = $customer_money - $total_price;
+
+        // Update ticket stock
+        $update_stmt = $conn->prepare("
+            UPDATE ticket_stock 
+            SET tickets_available = tickets_available - :quantity 
+            WHERE movie_id = :movie_id
+        ");
+        $update_stmt->execute(['quantity' => $quantity, 'movie_id' => $movie_id]);
+
+        // Update cash log
+        $cash_stmt = $conn->prepare("
+            UPDATE cash_log 
+            SET cash_on_hand = cash_on_hand + :total_price 
+            WHERE cashier_id = :cashier_id AND DATE(log_date) = CURDATE()
+        ");
+        $cash_stmt->execute([
+            'total_price' => $total_price,
+            'cashier_id' => $_SESSION['user_id'],
+        ]);
+
+        // Store sale details in session for receipt page
+        $_SESSION['sale_details'] = [
+            'movie_name' => $movie['movie_name'],
+            'quantity' => (int)$quantity, // Convert to integer
+            'ticket_price' => (float)$movie['ticket_price'], // Convert to float
+            'total_price' => (float)$total_price, // Convert to float
+            'customer_money' => (float)$customer_money, // Convert to float
+            'change' => (float)$change, // Convert to float
+        ];
+        
+        // Return sale details as part of the response
+        echo json_encode([
+            'success' => true,
+            'message' => 'Sale processed successfully. Redirecting to receipt...',
+            'sale_details' => $_SESSION['sale_details']
+        ]);
+        exit(); // Close the try block with a successful exit
+    } catch (Exception $e) {
+        // Handle any exceptions
+        echo json_encode(['success' => false, 'message' => 'An error occurred: ' . $e->getMessage()]);
+    }
 }
 ?>
 
@@ -124,101 +116,248 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $cash_log) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Process Sale - Ticketing System</title>
+    <title>Process Sale</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha3/dist/css/bootstrap.min.css">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+
+        .movie-card {
+            transition: transform 0.2s ease;
+        }
+
+        .movie-card:hover {
+            transform: scale(1.05);
+        }
+
+        .summary-card {
+            background-color: #fff3cd;
+            border-color: #ffeeba;
+        }
+    </style>
 </head>
+
 <body>
-    <div class="container mt-5">
-        <h1 class="mb-4">Process a Sale</h1>
+    <div class="container my-5">
+        <h1 class="text-center mb-4">Process Sale</h1>
 
-        <!-- Sale Form -->
-        <form id="saleForm" action="process_sale.php" method="POST">
-        <div class="mb-3">
-            <label for="movie_name" class="form-label">Select Movie</label>
-            <select class="form-select" id="movie_id" name="movie_id" required>
-                <option value="">Select a movie</option>
-                <?php foreach ($movies as $movie): ?>
-                    <option value="<?= $movie['id'] ?>">
-                        <?= htmlspecialchars($movie['movie_name']) ?> 
-                        (<?= date('F j, Y, g:i A', strtotime($movie['showtime_start'])) ?> to <?= date('g:i A', strtotime($movie['showtime_end'])) ?>)
-                        - Tickets Available: <?= $movie['tickets_available'] ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
+        <!-- Display Cashier's Current Amount -->
+        <?php
+        $stmt = $conn->prepare("
+            SELECT cash_on_hand FROM cash_log 
+            WHERE cashier_id = :cashier_id AND DATE(log_date) = CURDATE()
+        ");
+        $stmt->execute(['cashier_id' => $_SESSION['user_id']]);
+        $cash_log = $stmt->fetch(PDO::FETCH_ASSOC);
+        $cash_on_hand = $cash_log ? $cash_log['cash_on_hand'] : 0;
+        ?>
+        <div class="alert alert-info">
+            <strong>Cash on Hand:</strong> $<?php echo number_format($cash_on_hand, 2); ?>
         </div>
 
-
-            <div class="mb-3">
-                <label for="num_tickets" class="form-label">Number of Tickets</label>
-                <input type="number" class="form-control" id="num_tickets" name="num_tickets" required>
+        <!-- Step 1: List Available Movies -->
+        <h2>Available Movies</h2>
+        <div class="row g-4">
+        <?php foreach ($groupedMovies as $movieId => $movieDetails): ?>
+            <div class="col-md-4">
+                <div class="card movie-card shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title"><?php echo htmlspecialchars($movieDetails['movie_name']); ?></h5>
+                        <p class="card-text">
+                            <strong>Price:</strong> $<?php echo number_format($movieDetails['ticket_price'], 2); ?><br>
+                            <strong>Available:</strong> <?php echo $movieDetails['tickets_available']; ?><br>
+                        </p>
+                    </div>
+                </div>
             </div>
-            <div class="mb-3">
-                <label for="payment_amount" class="form-label">Payment Amount</label>
-                <input type="number" class="form-control" id="payment_amount" name="payment_amount" required>
-            </div>
-            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#confirmModal">Process Sale</button>
-        </form>
-        <a href="cashier_dashboard.php" class="btn btn-secondary mt-3">Back to Dashboard</a>
-
-        <!-- Receipt Section (Hidden initially) -->
-        <?php if ($receipt): ?>
-        <div class="alert alert-success mt-4">
-            <h4>Sale Receipt</h4>
-            <p><strong>Movie:</strong> <?= $receipt['movie_name'] ?></p>
-            <p><strong>Number of Tickets:</strong> <?= $receipt['num_tickets'] ?></p>
-            <p><strong>Total Sale:</strong> $<?= number_format($receipt['total_sale'], 2) ?></p>
-            <p><strong>Payment Received:</strong> $<?= number_format($receipt['payment_received'], 2) ?></p>
-            <p><strong>Change:</strong> $<?= number_format($receipt['change'], 2) ?></p>
+        <?php endforeach; ?>
         </div>
-        <?php endif; ?>
-    </div>
 
-    <!-- Modal for Cash In Reminder (If Cash In hasn't been done) -->
-    <?php if ($show_cash_in_modal): ?>
-    <div class="modal fade" id="cashInModal" tabindex="-1" aria-labelledby="cashInModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="cashInModalLabel">Cash In Required</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <!-- Step 2: Ticket Purchase Form -->
+        <div class="mt-5">
+            <h2>Purchase Tickets</h2>
+            <form id="purchaseForm" method="POST" action="process_sale.php">
+                <div class="mb-3">
+                    <label for="movie" class="form-label">Select Movie</label>
+                    <select id="movie" name="movie_id" class="form-select" required>
+                        <option value="" selected disabled>Choose a movie</option>
+                        <?php foreach ($groupedMovies as $movieId => $movieDetails): ?>
+                            <option value="<?php echo $movieId; ?>" data-price="<?php echo $movieDetails['ticket_price']; ?>" data-available="<?php echo $movieDetails['tickets_available']; ?>" data-showtimes='<?php echo json_encode($movieDetails['showtimes']); ?>'>
+                                <?php echo htmlspecialchars($movieDetails['movie_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
-                <div class="modal-body">
-                    You must log a cash-in amount before processing sales.
-                    <br><br>
-                    Please click below to log your cash-in.
+
+                <!-- Showtimes Dropdown (Initially Empty) -->
+                <div class="mb-3" id="showtimeContainer" style="display: none;">
+                    <label for="showtime" class="form-label">Select Showtime</label>
+                    <select id="showtime" name="showtime" class="form-select" required>
+                        <option value="" selected disabled>Choose a showtime</option>
+                    </select>
                 </div>
-                <div class="modal-footer">
-                    <a href="cash_in_out.php" class="btn btn-primary">Go to Cash In</a>
+
+                <div class="mb-3">
+                    <label for="quantity" class="form-label">Ticket Quantity</label>
+                    <input type="number" id="quantity" name="quantity" class="form-control" min="1" placeholder="Enter quantity" required>
+                </div>
+                <div class="mb-3">
+                    <label for="customer_money" class="form-label">Customer's Money</label>
+                    <input type="number" id="customer_money" name="customer_money" class="form-control" step="0.01" placeholder="Enter customer's money" required>
+                </div>
+                <button type="button" id="calculateButton" class="btn btn-primary">Calculate Total</button>
+            </form>
+        </div>
+
+        <!-- Modal for confirming purchase -->
+        <div class="modal fade" id="confirmPurchaseModal" tabindex="-1" aria-labelledby="confirmPurchaseModalLabel"
+            aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="confirmPurchaseModalLabel">Confirm Purchase</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="summaryDetails"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-primary" id="confirmPurchaseButton">Confirm
+                            Purchase</button>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
-    <script>
-        // Show the modal if cash-in is required
-        var myModal = new bootstrap.Modal(document.getElementById('cashInModal'));
-        myModal.show();
-    </script>
-    <?php endif; ?>
 
-    <!-- Modal for Sale Confirmation -->
-    <div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="confirmModalLabel">Confirm Sale</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    Are you sure you want to process this sale?
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary" form="saleForm">OK</button>
+        <!-- Modal for displaying the receipt -->
+        <div class="modal fade" id="receiptModal" tabindex="-1" aria-labelledby="receiptModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="receiptModalLabel">Sale Receipt</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="receiptSummary"></div> <!-- This will be filled dynamically with sale details -->
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
                 </div>
             </div>
         </div>
+
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    document.getElementById('movie').addEventListener('change', function () {
+        const movieSelect = this;
+        const showtimeContainer = document.getElementById('showtimeContainer');
+        const showtimeSelect = document.getElementById('showtime');
+        const showtimesData = JSON.parse(movieSelect.selectedOptions[0].getAttribute('data-showtimes'));
+
+        showtimeSelect.innerHTML = '<option value="" selected disabled>Choose a showtime</option>';
+        showtimeContainer.style.display = 'block'; // Show the showtime dropdown
+
+        showtimesData.forEach(function (showtime) {
+            const option = document.createElement('option');
+            option.value = showtime.showtime_start;
+            option.textContent = `${showtime.showtime_start} - ${showtime.showtime_end}`;
+            showtimeSelect.appendChild(option);
+        });
+    });
+
+    document.getElementById('calculateButton').addEventListener('click', function () {
+        const movieSelect = document.getElementById('movie');
+        const showtimeSelect = document.getElementById('showtime');
+        const quantityInput = document.getElementById('quantity');
+        const customerMoneyInput = document.getElementById('customer_money');
+        const summarySection = document.getElementById('summaryDetails');
+        const movieId = movieSelect.value;
+        const showtime = showtimeSelect.value; // Get selected showtime
+        const price = parseFloat(movieSelect.options[movieSelect.selectedIndex].getAttribute('data-price'));
+        const available = parseInt(movieSelect.options[movieSelect.selectedIndex].getAttribute('data-available'));
+        const quantity = parseInt(quantityInput.value);
+        const customerMoney = parseFloat(customerMoneyInput.value);
+
+        if (isNaN(quantity) || quantity < 1) {
+            alert('Please enter a valid quantity');
+            return;
+        }
+
+        if (isNaN(customerMoney) || customerMoney <= 0) {
+            alert('Please enter a valid amount of money');
+            return;
+        }
+
+        if (quantity > available) {
+            alert('Insufficient tickets available');
+            return;
+        }
+
+        const totalPrice = price * quantity;
+
+        summarySection.innerHTML = `  
+            <p><strong>Movie:</strong> ${movieSelect.options[movieSelect.selectedIndex].text}</p>
+            <p><strong>Showtime:</strong> ${showtime}</p>
+            <p><strong>Ticket Price:</strong> $${price.toFixed(2)}</p>
+            <p><strong>Quantity:</strong> ${quantity}</p>
+            <p><strong>Total Price:</strong> $${totalPrice.toFixed(2)}</p>
+            <p><strong>Customer's Money:</strong> $${customerMoney.toFixed(2)}</p>
+            <p><strong>Change:</strong> $${(customerMoney - totalPrice).toFixed(2)}</p>
+        `;
+
+        const modal = new bootstrap.Modal(document.getElementById('confirmPurchaseModal'));
+        modal.show();
+
+        document.getElementById('confirmPurchaseButton').disabled = false;
+    });
+
+    document.getElementById('confirmPurchaseButton').addEventListener('click', function () {
+        // Submit the form data via AJAX
+        const form = document.getElementById('purchaseForm');
+        const formData = new FormData(form);
+        formData.append('action', 'process_sale');
+
+        fetch('process_sale.php', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Sale processed successfully!');
+
+                // Set receipt details in the modal
+                const summarySection = document.getElementById('receiptSummary');
+                const saleDetails = data.sale_details; // Assuming the sale details are in data.sale_details
+
+                summarySection.innerHTML = `
+                    <p><strong>Movie:</strong> ${saleDetails.movie_name}</p>
+                    <p><strong>Quantity:</strong> ${saleDetails.quantity}</p>
+                    <p><strong>Ticket Price:</strong> $${saleDetails.ticket_price.toFixed(2)}</p>
+                    <p><strong>Total Price:</strong> $${saleDetails.total_price.toFixed(2)}</p>
+                    <p><strong>Customer's Money:</strong> $${saleDetails.customer_money.toFixed(2)}</p>
+                    <p><strong>Change:</strong> $${saleDetails.change.toFixed(2)}</p>
+                `;
+
+                // Show the receipt modal immediately
+                const receiptModal = new bootstrap.Modal(document.getElementById('receiptModal'));
+                receiptModal.show();
+            } else {
+                alert('Error: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('An error occurred while processing the sale.');
+        });
+    });
+    
+    </script>
+
 </body>
 </html>

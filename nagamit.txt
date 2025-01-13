@@ -2,11 +2,14 @@ Admin User:
 
 Username: admin1
 Password: adminpass
-Cashier User:
 
+Cashier User:
 Username: cashier1
 Password: cashierpass
 
+New Cashier User:
+Username: cashier2
+Password: cashierpass2
 
 
 

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Dec 20, 2024 at 12:57 PM
+-- Generation Time: Jan 13, 2025 at 12:18 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -52,6 +52,19 @@ CREATE TABLE `cash_log` (
   `log_date` date NOT NULL DEFAULT curdate()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `cash_log`
+--
+
+INSERT INTO `cash_log` (`id`, `cashier_id`, `cash_in`, `cash_out`, `cash_on_hand`, `log_date`) VALUES
+(3, 2, 7000.00, NULL, 7043.96, '2024-12-20'),
+(4, 2, 7000.00, NULL, 7246.00, '2024-12-21'),
+(6, 2, 1000.00, NULL, 1000.00, '2024-12-22'),
+(7, 2, 1000.00, 1000.00, -3860.00, '2024-12-23'),
+(8, 2, 1000.00, NULL, 1370.00, '2024-12-24'),
+(9, 2, 2000.00, NULL, 2080.00, '2024-12-26'),
+(10, 2, 2000.00, NULL, 2140.00, '2025-01-12');
+
 -- --------------------------------------------------------
 
 --
@@ -61,17 +74,16 @@ CREATE TABLE `cash_log` (
 CREATE TABLE `movies` (
   `id` int(11) NOT NULL,
   `movie_name` varchar(255) NOT NULL,
-  `ticket_price` decimal(10,2) NOT NULL,
-  `showtime` datetime NOT NULL,
-  `tickets_available` int(11) NOT NULL DEFAULT 0
+  `ticket_price` decimal(10,2) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Dumping data for table `movies`
 --
 
-INSERT INTO `movies` (`id`, `movie_name`, `ticket_price`, `showtime`, `tickets_available`) VALUES
-(3, 'Call Me by Your Name', 10.00, '2024-12-20 19:44:00', 100);
+INSERT INTO `movies` (`id`, `movie_name`, `ticket_price`) VALUES
+(8, 'Call Me by Your Name', 10.00),
+(9, 'Stranger', 10.00);
 
 -- --------------------------------------------------------
 
@@ -101,21 +113,41 @@ INSERT INTO `sales` (`sale_id`, `cashier_id`, `movie_name`, `quantity_sold`, `to
 (6, 2, 'hello', 3, 30.00, '2024-12-19 12:11:56'),
 (7, 2, 'hello', 3, 30.00, '2024-12-19 12:12:02'),
 (8, 2, 'Hello, love, goodbye', 2, 20.00, '2024-12-19 12:12:28'),
-(9, 2, 'Call Me by Your Name', 2, 20.00, '2024-12-20 11:33:54');
+(9, 2, 'Call Me by Your Name', 2, 20.00, '2024-12-20 11:33:54'),
+(10, 2, 'Movie Title', 2, 21.98, '2024-12-20 12:28:32'),
+(11, 2, 'Movie Title', 2, 21.98, '2024-12-20 12:29:51'),
+(12, 2, 'Stranger', 12, 216.00, '2024-12-21 02:50:24'),
+(13, 2, 'Call Me by Your Name', 1, 10.00, '2024-12-21 09:40:41'),
+(14, 2, 'Call Me by Your Name', 2, 20.00, '2024-12-21 14:53:04');
 
 -- --------------------------------------------------------
 
 --
--- Table structure for table `tickets`
+-- Table structure for table `showtimes`
 --
 
-CREATE TABLE `tickets` (
-  `ticket_id` int(11) NOT NULL,
-  `movie_name` varchar(100) NOT NULL,
-  `price` decimal(10,2) NOT NULL,
-  `available_stock` int(11) NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+CREATE TABLE `showtimes` (
+  `id` int(11) NOT NULL,
+  `movie_id` int(11) NOT NULL,
+  `showtime_start` datetime NOT NULL,
+  `showtime_end` datetime NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `showtimes`
+--
+
+INSERT INTO `showtimes` (`id`, `movie_id`, `showtime_start`, `showtime_end`) VALUES
+(1, 8, '2025-01-12 09:30:00', '2024-12-23 11:30:00'),
+(2, 8, '2025-01-12 09:30:00', '2024-12-23 11:30:00'),
+(3, 8, '2025-01-12 09:30:00', '2024-12-23 11:30:00'),
+(4, 8, '2025-01-12 09:30:00', '2024-12-23 11:30:00'),
+(5, 8, '2025-01-12 09:30:00', '2024-12-23 11:30:00'),
+(6, 9, '2025-01-12 09:49:00', '2025-01-12 12:00:00'),
+(7, 9, '2025-01-12 09:49:00', '2025-01-12 12:00:00'),
+(8, 9, '2025-01-12 09:49:00', '2025-01-12 12:00:00'),
+(9, 9, '2025-01-12 09:49:00', '2025-01-12 12:00:00'),
+(10, 9, '2025-01-12 09:49:00', '2025-01-12 12:00:00');
 
 -- --------------------------------------------------------
 
@@ -125,15 +157,17 @@ CREATE TABLE `tickets` (
 
 CREATE TABLE `ticket_stock` (
   `id` int(11) NOT NULL,
-  `tickets_available` int(11) NOT NULL
+  `tickets_available` int(11) NOT NULL,
+  `movie_id` int(11) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Dumping data for table `ticket_stock`
 --
 
-INSERT INTO `ticket_stock` (`id`, `tickets_available`) VALUES
-(1, 59);
+INSERT INTO `ticket_stock` (`id`, `tickets_available`, `movie_id`) VALUES
+(8, 41, 8),
+(9, 86, 9);
 
 -- --------------------------------------------------------
 
@@ -189,16 +223,18 @@ ALTER TABLE `sales`
   ADD KEY `cashier_id` (`cashier_id`);
 
 --
--- Indexes for table `tickets`
+-- Indexes for table `showtimes`
 --
-ALTER TABLE `tickets`
-  ADD PRIMARY KEY (`ticket_id`);
+ALTER TABLE `showtimes`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `movie_id` (`movie_id`);
 
 --
 -- Indexes for table `ticket_stock`
 --
 ALTER TABLE `ticket_stock`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `fk_movie_id` (`movie_id`);
 
 --
 -- Indexes for table `users`
@@ -221,31 +257,31 @@ ALTER TABLE `cash`
 -- AUTO_INCREMENT for table `cash_log`
 --
 ALTER TABLE `cash_log`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `movies`
 --
 ALTER TABLE `movies`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `sales`
 --
 ALTER TABLE `sales`
-  MODIFY `sale_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `sale_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
--- AUTO_INCREMENT for table `tickets`
+-- AUTO_INCREMENT for table `showtimes`
 --
-ALTER TABLE `tickets`
-  MODIFY `ticket_id` int(11) NOT NULL AUTO_INCREMENT;
+ALTER TABLE `showtimes`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `ticket_stock`
 --
 ALTER TABLE `ticket_stock`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `users`
@@ -274,6 +310,18 @@ ALTER TABLE `cash_log`
 --
 ALTER TABLE `sales`
   ADD CONSTRAINT `sales_ibfk_1` FOREIGN KEY (`cashier_id`) REFERENCES `users` (`user_id`);
+
+--
+-- Constraints for table `showtimes`
+--
+ALTER TABLE `showtimes`
+  ADD CONSTRAINT `showtimes_ibfk_1` FOREIGN KEY (`movie_id`) REFERENCES `movies` (`id`);
+
+--
+-- Constraints for table `ticket_stock`
+--
+ALTER TABLE `ticket_stock`
+  ADD CONSTRAINT `fk_movie_id` FOREIGN KEY (`movie_id`) REFERENCES `movies` (`id`) ON DELETE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

@@ -5,16 +5,16 @@ require 'db_connection.php';
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $username = $_POST['username'];
     $password = $_POST['password']; // Raw password entered by the user
-    $role = $_POST['role']; // Role selected by the user
+    $role = $_POST['role']; // Role selected in the login form
 
-    // Query to check the user
-    $stmt = $conn->prepare("SELECT * FROM users WHERE username = :username");
-    $stmt->execute(['username' => $username]);
+    // Query to check the user based on both username and role
+    $stmt = $conn->prepare("SELECT * FROM users WHERE username = :username AND role = :role");
+    $stmt->execute(['username' => $username, 'role' => $role]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($user) {
-        // Verify the password and role
-        if (password_verify($password, $user['password']) && $user['role'] === $role) {
+        // Verify the password using password_verify
+        if (password_verify($password, $user['password'])) {
             // Set session variables
             $_SESSION['user_id'] = $user['user_id'];
             $_SESSION['username'] = $user['username'];
@@ -29,12 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 exit;
             }
         } else {
-            $_SESSION['error'] = "Invalid username, password, or role.";
+            $_SESSION['error'] = "Invalid username or password.";
             header('Location: login.php'); // Redirect to login page with error message
             exit;
         }
     } else {
-        $_SESSION['error'] = "Invalid username, password, or role.";
+        $_SESSION['error'] = "Invalid username or password or wrong role.";
         header('Location: login.php'); // Redirect to login page with error message
         exit;
     }

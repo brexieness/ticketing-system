@@ -48,7 +48,6 @@ $cash_in_status = $cash_log ? "Cash-in amount logged." : "You have not logged yo
             <div class="row g-4">
                 <!-- Process Sale Button -->
                 <div class="col-md-4">
-                    <!-- If no cash-in logged, show warning message and disable the button -->
                     <?php if ($cash_log): ?>
                         <a href="process_sale.php" class="btn btn-primary btn-lg btn-block">Process a Sale</a>
                     <?php else: ?>
@@ -63,7 +62,12 @@ $cash_in_status = $cash_log ? "Cash-in amount logged." : "You have not logged yo
                 <div class="col-md-4">
                     <a href="view_sales_report.php" class="btn btn-info btn-lg btn-block">View Personal Sales Report</a>
                 </div>
+                <!-- Change Password Button -->
+                <div class="col-md-4">
+                    <a href="change_password.php" class="btn btn-secondary btn-lg btn-block">Change Password</a>
+                </div>
             </div>
+
 
             <!-- If no cash-in logged, prompt user to log cash-in -->
             <?php if (!$cash_log): ?>
